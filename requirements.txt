@@ -1,0 +1,7 @@
+fastapi==0.135.1
+uvicorn==0.41.0
+requests==2.32.5
+qwen-agent==0.0.34
+ddgs==9.11.1
+beautifulsoup4==4.14.3
+Pillow==11.3.0
