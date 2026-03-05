@@ -52,19 +52,35 @@ function Get-ModelId {
     }
 }
 
+function Write-SpinnerLine {
+    param(
+        [string]$Label,
+        [int]$Current,
+        [int]$Total,
+        [int]$Tick
+    )
+    $frames = @('|', '/', '-', '\')
+    $frame = $frames[$Tick % $frames.Count]
+    Write-Host -NoNewline "`r$Label $frame $Current/$Total 秒"
+}
+
+function Complete-SpinnerLine {
+    Write-Host ''
+}
+
 function Wait-Ready {
     for ($i = 0; $i -lt 60; $i++) {
-        if (($i % 5) -eq 0) {
-            Write-Host "后端加载中... $i/60 秒"
-        }
+        Write-SpinnerLine -Label '后端加载中...' -Current ($i + 1) -Total 60 -Tick $i
         if (Test-Health) {
             $modelId = Get-ModelId
             if (-not [string]::IsNullOrWhiteSpace($modelId)) {
+                Complete-SpinnerLine
                 return $true
             }
         }
         Start-Sleep -Seconds 1
     }
+    Complete-SpinnerLine
     return $false
 }
 
@@ -123,10 +139,12 @@ function Ensure-GpuOffload {
     $result = @{ Ready = $false; Reason = '未知原因' }
     $nvidiaResult = @{ Ready = $false; Reason = '未执行检查' }
     for ($i = 0; $i -lt 60; $i++) {
+        Write-SpinnerLine -Label 'GPU 校验中...' -Current ($i + 1) -Total 60 -Tick $i
         $moduleResult = Test-CudaBackendLoaded -ProcessId $ProcessId
         $result = Test-GpuReadyFromLogs -OutLogPath $OutLogPath -ErrLogPath $ErrLogPath
         $nvidiaResult = Test-GpuReadyByNvidiaSmi -BaselineMemoryMiB $BaselineMemoryMiB
         if ($moduleResult.Ready -and ($result.Ready -or $nvidiaResult.Ready)) {
+            Complete-SpinnerLine
             if ($result.Ready) {
                 return "$($moduleResult.Reason)；$($result.Reason)"
             }
@@ -134,6 +152,7 @@ function Ensure-GpuOffload {
         }
         Start-Sleep -Seconds 1
     }
+    Complete-SpinnerLine
     throw "已禁止 CPU 回退，但未检测到 GPU 卸载。模块检查: $($moduleResult.Reason)；nvidia-smi: $($nvidiaResult.Reason)；日志检查: $($result.Reason)"
 }
 

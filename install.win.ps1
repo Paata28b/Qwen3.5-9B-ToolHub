@@ -33,6 +33,34 @@ function Write-Step {
     Write-Host "[install] $Message"
 }
 
+function Format-MiB {
+    param([long]$Bytes)
+    if ($Bytes -lt 0) {
+        return '0.0'
+    }
+    return ('{0:N1}' -f ($Bytes / 1MB))
+}
+
+function Write-DownloadProgress {
+    param(
+        [string]$Label,
+        [long]$DownloadedBytes,
+        [long]$TotalBytes,
+        [int]$Tick
+    )
+    $frames = @('|', '/', '-', '\')
+    $frame = $frames[$Tick % $frames.Count]
+    if ($TotalBytes -gt 0) {
+        $percent = [math]::Min(100, [int](($DownloadedBytes * 100) / $TotalBytes))
+        $done = Format-MiB -Bytes $DownloadedBytes
+        $total = Format-MiB -Bytes $TotalBytes
+        Write-Host -NoNewline "`r[install] $Label $percent% ($done/$total MiB)"
+        return
+    }
+    $doneOnly = Format-MiB -Bytes $DownloadedBytes
+    Write-Host -NoNewline "`r[install] $Label $frame 已下载 $doneOnly MiB"
+}
+
 function Get-PythonExe {
     if ($env:PYTHON_BIN -and (Test-Path $env:PYTHON_BIN)) {
         return $env:PYTHON_BIN
@@ -73,7 +101,57 @@ function Download-File {
         [string]$OutFile
     )
     Write-Step "下载: $Url"
-    Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
+    $targetDir = Split-Path -Parent $OutFile
+    if (-not [string]::IsNullOrWhiteSpace($targetDir)) {
+        Ensure-Dir $targetDir
+    }
+    $tempFile = "$OutFile.part"
+    if (Test-Path $tempFile) {
+        Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+    }
+
+    $response = $null
+    $inStream = $null
+    $outStream = $null
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($Url)
+        $request.AllowAutoRedirect = $true
+        $request.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+        $response = $request.GetResponse()
+        $totalBytes = [long]$response.ContentLength
+        $inStream = $response.GetResponseStream()
+        $outStream = [System.IO.File]::Open($tempFile, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+
+        $buffer = New-Object byte[] (1MB)
+        $downloadedBytes = [long]0
+        $tick = 0
+        $lastTick = [System.Diagnostics.Stopwatch]::StartNew()
+        while (($read = $inStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $outStream.Write($buffer, 0, $read)
+            $downloadedBytes += $read
+            if ($lastTick.ElapsedMilliseconds -ge 250) {
+                Write-DownloadProgress -Label '下载中' -DownloadedBytes $downloadedBytes -TotalBytes $totalBytes -Tick $tick
+                $tick++
+                $lastTick.Restart()
+            }
+        }
+        Write-DownloadProgress -Label '下载中' -DownloadedBytes $downloadedBytes -TotalBytes $totalBytes -Tick $tick
+        Write-Host ''
+    } catch {
+        if (Test-Path $tempFile) {
+            Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    } finally {
+        if ($outStream) { $outStream.Dispose() }
+        if ($inStream) { $inStream.Dispose() }
+        if ($response) { $response.Dispose() }
+    }
+
+    if (Test-Path $OutFile) {
+        Remove-Item -Path $OutFile -Force -ErrorAction SilentlyContinue
+    }
+    Move-Item -Path $tempFile -Destination $OutFile -Force
 }
 
 function Verify-Sha256 {

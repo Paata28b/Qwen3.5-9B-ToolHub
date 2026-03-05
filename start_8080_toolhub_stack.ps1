@@ -50,6 +50,22 @@ function Test-GatewayReady {
     }
 }
 
+function Write-SpinnerLine {
+    param(
+        [string]$Label,
+        [int]$Current,
+        [int]$Total,
+        [int]$Tick
+    )
+    $frames = @('|', '/', '-', '\')
+    $frame = $frames[$Tick % $frames.Count]
+    Write-Host -NoNewline "`r$Label $frame $Current/$Total 秒"
+}
+
+function Complete-SpinnerLine {
+    Write-Host ''
+}
+
 function Stop-OrphanGatewayProcesses {
     try {
         $rootPattern = [regex]::Escape($RootDir)
@@ -110,14 +126,14 @@ function Start-Gateway {
     Set-Content -Path $PidFile -Value $proc.Id -Encoding ascii
 
     for ($i = 0; $i -lt 60; $i++) {
-        if (($i % 5) -eq 0) {
-            Write-Host "网关启动中... $i/60 秒"
-        }
+        Write-SpinnerLine -Label '网关启动中...' -Current ($i + 1) -Total 60 -Tick $i
         if ((Test-GatewayRunning) -and (Test-GatewayReady)) {
+            Complete-SpinnerLine
             return
         }
         Start-Sleep -Seconds 1
     }
+    Complete-SpinnerLine
 
     if (Test-Path $LogFile) {
         Write-Host '网关启动失败，日志如下:'
