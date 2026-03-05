@@ -14,12 +14,18 @@ $MmprojPath = Join-Path $ModelDir 'mmproj-Qwen3.5-9B-BF16.gguf'
 
 $DefaultGgufUrl = 'https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf'
 $DefaultMmprojUrl = 'https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/mmproj-Qwen3.5-9B-BF16.gguf'
-$PreferredCudaAssetRegexes = @(
+$LlamaReleaseApiUrl = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest'
+$LlamaReleasePageUrl = 'https://github.com/ggml-org/llama.cpp/releases/latest'
+$LlamaReleaseDownloadPrefix = 'https://github.com/ggml-org/llama.cpp/releases/latest/download/'
+$PreferredCudaBinAssetRegexes = @(
     '^llama-.*-bin-win-cuda-12\.4-x64\.zip$',
-    '^cudart-llama-bin-win-cuda-12\.4-x64\.zip$',
     '^llama-.*-bin-win-cuda-13\.1-x64\.zip$',
+    '^llama-.*-bin-win-cuda-.*-x64\.zip$'
+)
+$PreferredCudaRuntimeAssetRegexes = @(
+    '^cudart-llama-bin-win-cuda-12\.4-x64\.zip$',
     '^cudart-llama-bin-win-cuda-13\.1-x64\.zip$',
-    'win-cuda-.*-x64\.zip$'
+    '^cudart-llama-bin-win-cuda-.*-x64\.zip$'
 )
 
 function Write-Step {
@@ -45,13 +51,13 @@ function Get-PythonExe {
 function Invoke-Python {
     param(
         [string]$PythonSpec,
-        [string[]]$Args
+        [string[]]$PythonArgs
     )
     if ($PythonSpec -eq 'py -3') {
-        & py -3 @Args
+        & py -3 @PythonArgs
         return
     }
-    & $PythonSpec @Args
+    & $PythonSpec @PythonArgs
 }
 
 function Ensure-Dir {
@@ -85,23 +91,135 @@ function Verify-Sha256 {
     }
 }
 
-function Resolve-LlamaCudaUrl {
-    if ($env:LLAMA_WIN_CUDA_URL) {
-        return $env:LLAMA_WIN_CUDA_URL
-    }
-    $api = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest'
-    $release = Invoke-RestMethod -Uri $api -Method Get
-    foreach ($assetRegex in $PreferredCudaAssetRegexes) {
-        foreach ($asset in $release.assets) {
-            if ($asset.name -match $assetRegex) {
-                Write-Step "使用 llama.cpp 资源: $($asset.name)"
-                return $asset.browser_download_url
+function Get-LlamaReleaseAssetsFromApi {
+    try {
+        $release = Invoke-RestMethod -Uri $LlamaReleaseApiUrl -Method Get
+        return @($release.assets | ForEach-Object {
+            [PSCustomObject]@{
+                Name = [string]$_.name
+                Url = [string]$_.browser_download_url
             }
+        })
+    } catch {
+        Write-Step "GitHub API 不可用，改用页面解析。原因: $($_.Exception.Message)"
+        return @()
+    }
+}
+
+function Get-LlamaReleaseAssetsFromHtml {
+    try {
+        $response = Invoke-WebRequest -Uri $LlamaReleasePageUrl -UseBasicParsing
+    } catch {
+        throw "获取 llama.cpp release 页面失败: $($_.Exception.Message)"
+    }
+    $content = [string]$response.Content
+    $regex = '(?:cudart-)?llama-[^"''<> ]*bin-win-cuda-[0-9.]+-x64\.zip'
+    $matches = [regex]::Matches($content, $regex, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $seen = @{}
+    $assets = @()
+    foreach ($match in $matches) {
+        $name = [string]$match.Value
+        $key = $name.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) {
+            continue
+        }
+        $seen[$key] = $true
+        $assets += [PSCustomObject]@{
+            Name = $name
+            Url = "$LlamaReleaseDownloadPrefix$name"
         }
     }
-    $assetNames = @($release.assets | ForEach-Object { $_.name })
-    $preview = ($assetNames | Select-Object -First 12) -join ', '
-    throw "自动解析 llama.cpp CUDA 下载地址失败。未匹配到 win-cuda x64 资源。可用资源: $preview。可手动设置 LLAMA_WIN_CUDA_URL。"
+    return $assets
+}
+
+function Select-LlamaAsset {
+    param(
+        [object[]]$Assets,
+        [string[]]$Regexes
+    )
+    foreach ($regex in $Regexes) {
+        $candidate = $Assets | Where-Object { $_.Name -match $regex } | Select-Object -First 1
+        if ($candidate) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Resolve-LlamaCudaAssets {
+    if ($env:LLAMA_WIN_CUDA_URL) {
+        $binName = Split-Path -Path $env:LLAMA_WIN_CUDA_URL -Leaf
+        $runtimeUrl = if ($env:LLAMA_WIN_CUDART_URL) { [string]$env:LLAMA_WIN_CUDART_URL } else { '' }
+        $runtimeName = if ([string]::IsNullOrWhiteSpace($runtimeUrl)) { '' } else { (Split-Path -Path $runtimeUrl -Leaf) }
+        Write-Step "使用自定义 llama.cpp 主包: $binName"
+        if (-not [string]::IsNullOrWhiteSpace($runtimeName)) {
+            Write-Step "使用自定义 CUDA 运行时包: $runtimeName"
+        }
+        return @{
+            BinUrl = [string]$env:LLAMA_WIN_CUDA_URL
+            RuntimeUrl = $runtimeUrl
+        }
+    }
+
+    $assets = Get-LlamaReleaseAssetsFromApi
+    if ($assets.Count -eq 0) {
+        $assets = Get-LlamaReleaseAssetsFromHtml
+    }
+    if ($assets.Count -eq 0) {
+        throw '自动解析 llama.cpp CUDA 资源失败，未读取到任何 win-cuda 包。'
+    }
+
+    $bin = Select-LlamaAsset -Assets $assets -Regexes $PreferredCudaBinAssetRegexes
+    if (-not $bin) {
+        $preview = (@($assets | Select-Object -ExpandProperty Name | Select-Object -First 12)) -join ', '
+        throw "自动解析失败：未找到完整 CUDA 主包。可用资源: $preview"
+    }
+    $runtime = Select-LlamaAsset -Assets $assets -Regexes $PreferredCudaRuntimeAssetRegexes
+    Write-Step "使用 llama.cpp 主包: $($bin.Name)"
+    if ($runtime) {
+        Write-Step "可选 CUDA 运行时包: $($runtime.Name)"
+    }
+    return @{
+        BinUrl = [string]$bin.Url
+        RuntimeUrl = if ($runtime) { [string]$runtime.Url } else { '' }
+    }
+}
+
+function Get-LlamaRuntimeStatus {
+    param([string]$BaseDir)
+    $missing = @()
+    $llamaExe = Test-Path (Join-Path $BaseDir 'llama-server.exe')
+    if (-not $llamaExe) {
+        $missing += 'llama-server.exe'
+    }
+    $cudaBackendDll = @(Get-ChildItem -Path $BaseDir -Filter 'ggml-cuda*.dll' -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($cudaBackendDll.Count -eq 0) {
+        $missing += 'ggml-cuda*.dll'
+    }
+    $cudartDll = @(Get-ChildItem -Path $BaseDir -Filter 'cudart64_*.dll' -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($cudartDll.Count -eq 0) {
+        $missing += 'cudart64_*.dll'
+    }
+    $cublasDll = @(Get-ChildItem -Path $BaseDir -Filter 'cublas64_*.dll' -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($cublasDll.Count -eq 0) {
+        $missing += 'cublas64_*.dll'
+    }
+    return @{
+        Ready = ($missing.Count -eq 0)
+        Missing = $missing
+    }
+}
+
+function Clear-LlamaRuntimeDirectory {
+    if (-not (Test-Path $LlamaDir)) {
+        Ensure-Dir $LlamaDir
+        return
+    }
+    try {
+        Get-ChildItem -Path $LlamaDir -Force -ErrorAction Stop | Remove-Item -Recurse -Force -ErrorAction Stop
+    } catch {
+        throw "清理 CUDA 运行时目录失败，请先停止服务后重试。目录: $LlamaDir。错误: $($_.Exception.Message)"
+    }
 }
 
 function Ensure-PythonEnv {
@@ -113,14 +231,14 @@ function Ensure-PythonEnv {
         Remove-Item -Path $VenvDir -Recurse -Force -ErrorAction SilentlyContinue
         if (Test-Path $VenvDir) {
             Write-Step '目录无法直接删除，尝试 venv --clear 重建'
-            Invoke-Python -PythonSpec $python -Args @('-m', 'venv', '--clear', $VenvDir)
+            Invoke-Python -PythonSpec $python -PythonArgs @('-m', 'venv', '--clear', $VenvDir)
         }
         $venvExists = Test-Path $VenvDir
         $venvPythonExists = Test-Path $VenvPython
     }
     if (-not $venvExists) {
         Write-Step "创建虚拟环境: $VenvDir"
-        Invoke-Python -PythonSpec $python -Args @('-m', 'venv', $VenvDir)
+        Invoke-Python -PythonSpec $python -PythonArgs @('-m', 'venv', $VenvDir)
     }
     if (-not (Test-Path $VenvPython)) {
         throw "虚拟环境 Python 不存在: $VenvPython"
@@ -132,30 +250,44 @@ function Ensure-PythonEnv {
 
 function Ensure-LlamaRuntime {
     Ensure-Dir $LlamaDir
-    $llamaExe = Join-Path $LlamaDir 'llama-server.exe'
-    if (Test-Path $llamaExe) {
-        Write-Step '检测到现有 llama-server.exe，跳过下载'
+    $status = Get-LlamaRuntimeStatus -BaseDir $LlamaDir
+    if ($status.Ready) {
+        Write-Step '检测到完整 CUDA 运行时，跳过下载'
         return
     }
+    Write-Step '检测到不完整 CUDA 运行时，清理后重装'
+    Clear-LlamaRuntimeDirectory
 
-    $zipPath = Join-Path $LlamaDir 'llama-win-cuda.zip'
-    $url = Resolve-LlamaCudaUrl
-    Download-File -Url $url -OutFile $zipPath
+    $assets = Resolve-LlamaCudaAssets
+    $binZipPath = Join-Path $LlamaDir 'llama-win-cuda-bin.zip'
+    Download-File -Url $assets.BinUrl -OutFile $binZipPath
+    Write-Step '解压 llama.cpp CUDA 主包'
+    Expand-Archive -Path $binZipPath -DestinationPath $LlamaDir -Force
 
-    Write-Step '解压 llama.cpp CUDA 运行时'
-    Expand-Archive -Path $zipPath -DestinationPath $LlamaDir -Force
-
-    if (-not (Test-Path $llamaExe)) {
-        $found = Get-ChildItem -Path $LlamaDir -Filter 'llama-server.exe' -Recurse -File | Select-Object -First 1
-        if (-not $found) {
-            throw 'llama-server.exe 下载或解压失败。'
-        }
-        $srcDir = Split-Path -Parent $found.FullName
+    $foundServer = Get-ChildItem -Path $LlamaDir -Filter 'llama-server.exe' -Recurse -File | Select-Object -First 1
+    if (-not $foundServer) {
+        throw 'llama-server.exe 下载或解压失败，未在主包中找到可执行文件。'
+    }
+    $srcDir = Split-Path -Parent $foundServer.FullName
+    $srcDirResolved = (Resolve-Path $srcDir).Path
+    $llamaDirResolved = (Resolve-Path $LlamaDir).Path
+    if ($srcDirResolved -ne $llamaDirResolved) {
         Copy-Item -Path (Join-Path $srcDir '*') -Destination $LlamaDir -Recurse -Force
     }
 
-    if (-not (Test-Path $llamaExe)) {
-        throw 'llama-server.exe 下载或解压失败。'
+    $status = Get-LlamaRuntimeStatus -BaseDir $LlamaDir
+    $needRuntime = ($status.Missing | Where-Object { $_ -match '^cudart64_|^cublas64_' }).Count -gt 0
+    if ($needRuntime -and -not [string]::IsNullOrWhiteSpace([string]$assets.RuntimeUrl)) {
+        $runtimeZipPath = Join-Path $LlamaDir 'llama-win-cuda-runtime.zip'
+        Download-File -Url $assets.RuntimeUrl -OutFile $runtimeZipPath
+        Write-Step '解压 CUDA 运行时补充包'
+        Expand-Archive -Path $runtimeZipPath -DestinationPath $LlamaDir -Force
+    }
+
+    $status = Get-LlamaRuntimeStatus -BaseDir $LlamaDir
+    if (-not $status.Ready) {
+        $missingText = ($status.Missing -join ', ')
+        throw "CUDA 运行时不完整，缺失: $missingText"
     }
 }
 

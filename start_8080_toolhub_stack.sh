@@ -2,169 +2,83 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_BIN="$ROOT_DIR/.venv-qwen35/bin/python"
-GATEWAY_RUN="$ROOT_DIR/run_8080_toolhub_gateway.py"
-RUNTIME_DIR="$ROOT_DIR/.tmp/toolhub_gateway"
-PID_FILE="$RUNTIME_DIR/gateway.pid"
-LOG_FILE="$RUNTIME_DIR/gateway.log"
-MODEL_SWITCH="$ROOT_DIR/switch_qwen35_webui.sh"
+PS1_PATH="$ROOT_DIR/start_8080_toolhub_stack.ps1"
 
-GATEWAY_HOST="${GATEWAY_HOST:-127.0.0.1}"
-GATEWAY_PORT="${GATEWAY_PORT:-8080}"
-BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
-BACKEND_PORT="${BACKEND_PORT:-8081}"
-THINK_MODE="${THINK_MODE:-think-on}"
-
-mkdir -p "$RUNTIME_DIR"
-
-is_gateway_running() {
-  if [[ ! -f "$PID_FILE" ]]; then
-    return 1
-  fi
-  local pid
-  pid="$(cat "$PID_FILE")"
-  [[ -n "$pid" ]] || return 1
-  ps -p "$pid" >/dev/null 2>&1
-}
-
-gateway_ready() {
-  curl --noproxy '*' -sS -m 2 "http://$GATEWAY_HOST:$GATEWAY_PORT/gateway/health" >/dev/null 2>&1
-}
-
-start_backend() {
-  local model_key="${MODEL_KEY:-9b}"
-  if [[ "$model_key" != "9b" ]]; then
-    echo "当前交付包仅支持 MODEL_KEY=9b，收到: $model_key"
-    exit 1
-  fi
-  (
-    cd "$ROOT_DIR"
-    HOST="$BACKEND_HOST" PORT="$BACKEND_PORT" "$MODEL_SWITCH" "9b" "$THINK_MODE"
-  )
-}
-
-start_gateway() {
-  if is_gateway_running; then
-    echo "网关状态: 已运行"
-    echo "PID: $(cat "$PID_FILE")"
-    return
-  fi
-  setsid "$PYTHON_BIN" "$GATEWAY_RUN" \
-    --host "$GATEWAY_HOST" \
-    --port "$GATEWAY_PORT" \
-    --backend-base "http://$BACKEND_HOST:$BACKEND_PORT" \
-    --model-server "http://$BACKEND_HOST:$BACKEND_PORT/v1" \
-    >"$LOG_FILE" 2>&1 < /dev/null &
-  echo "$!" >"$PID_FILE"
-
-  local retry=0
-  while (( retry < 60 )); do
-    if ! is_gateway_running; then
-      break
-    fi
-    if gateway_ready; then
-      break
-    fi
-    retry=$((retry + 1))
-    sleep 1
-  done
-  if ! is_gateway_running || ! gateway_ready; then
-    echo "网关启动失败，日志如下:"
-    tail -n 120 "$LOG_FILE" || true
-    exit 1
-  fi
-}
-
-stop_gateway() {
-  if ! is_gateway_running; then
-    rm -f "$PID_FILE"
-    echo "网关状态: 未运行"
-    return
-  fi
-  local pid
-  pid="$(cat "$PID_FILE")"
-  kill "$pid" >/dev/null 2>&1 || true
-  sleep 1
-  if ps -p "$pid" >/dev/null 2>&1; then
-    kill -9 "$pid" >/dev/null 2>&1 || true
-  fi
-  rm -f "$PID_FILE"
-  echo "网关状态: 已停止"
-}
-
-show_status() {
-  echo "=== 网关 ==="
-  if is_gateway_running; then
-    local web_state="初始化中"
-    if gateway_ready; then
-      web_state="可访问"
-    fi
-    echo "状态: 运行中"
-    echo "PID: $(cat "$PID_FILE")"
-    echo "地址: http://$GATEWAY_HOST:$GATEWAY_PORT"
-    echo "健康: $web_state"
-    echo "日志: $LOG_FILE"
-  else
-    echo "状态: 未运行"
-  fi
-  echo
-  echo "=== 模型后端 ==="
-  (
-    cd "$ROOT_DIR"
-    HOST="$BACKEND_HOST" PORT="$BACKEND_PORT" "$MODEL_SWITCH" status
-  )
-}
-
-show_logs() {
-  echo "=== 网关日志 ==="
-  tail -n 120 "$LOG_FILE" || true
-}
-
-start_stack() {
-  start_backend
-  start_gateway
-  echo "栈已启动"
-  echo "前端入口: http://$GATEWAY_HOST:$GATEWAY_PORT"
-  echo "模型后端: http://$BACKEND_HOST:$BACKEND_PORT"
-}
-
-stop_stack() {
-  stop_gateway
-  (
-    cd "$ROOT_DIR"
-    HOST="$BACKEND_HOST" PORT="$BACKEND_PORT" "$MODEL_SWITCH" stop
-  )
-}
-
-case "${1:-status}" in
-  start)
-    start_stack
-    ;;
-  stop)
-    stop_stack
-    ;;
-  restart)
-    stop_stack
-    start_stack
-    ;;
-  status)
-    show_status
-    ;;
-  logs)
-    show_logs
-    ;;
-  *)
-    cat <<'EOF'
+print_usage() {
+  cat <<'USAGE'
 用法:
   ./start_8080_toolhub_stack.sh {start|stop|restart|status|logs}
 
-可选环境变量:
-  GATEWAY_HOST=127.0.0.1
-  GATEWAY_PORT=8080
-  BACKEND_HOST=127.0.0.1
-  BACKEND_PORT=8081
-  THINK_MODE=think-on
-EOF
+说明:
+  WSL 入口会直接复用 Windows 主脚本的完整启动链路。
+  包括后端 GPU 强校验与网关管理，行为与 cmd / PowerShell 保持一致。
+USAGE
+}
+
+to_win_path_if_needed() {
+  local raw="$1"
+  if [[ -z "$raw" ]]; then
+    printf ''
+    return
+  fi
+  if [[ "$raw" == /* ]]; then
+    wslpath -w "$raw"
+    return
+  fi
+  printf '%s' "$raw"
+}
+
+require_windows_power_shell() {
+  if ! command -v powershell.exe >/dev/null 2>&1; then
+    echo "未找到 powershell.exe，无法从 WSL 调用 Windows 栈脚本。"
     exit 1
-    ;;
-esac
+  fi
+  if [[ ! -f "$PS1_PATH" ]]; then
+    echo "缺少栈脚本: $PS1_PATH"
+    exit 1
+  fi
+}
+
+build_env_overrides() {
+  local -n out_ref=$1
+  out_ref=()
+
+  for key in GATEWAY_HOST GATEWAY_PORT BACKEND_HOST BACKEND_PORT THINK_MODE HOST PORT CTX_SIZE IMAGE_MIN_TOKENS IMAGE_MAX_TOKENS MMPROJ_OFFLOAD GPU_MEMORY_DELTA_MIN_MIB; do
+    if [[ -n "${!key-}" ]]; then
+      out_ref+=("$key=${!key}")
+    fi
+  done
+
+  if [[ -n "${BIN_PATH-}" ]]; then
+    out_ref+=("BIN_PATH=$(to_win_path_if_needed "$BIN_PATH")")
+  fi
+  if [[ -n "${MODEL_PATH-}" ]]; then
+    out_ref+=("MODEL_PATH=$(to_win_path_if_needed "$MODEL_PATH")")
+  fi
+  if [[ -n "${MMPROJ_PATH-}" ]]; then
+    out_ref+=("MMPROJ_PATH=$(to_win_path_if_needed "$MMPROJ_PATH")")
+  fi
+}
+
+main() {
+  local command="${1:-status}"
+  case "$command" in
+    start|stop|restart|status|logs) ;;
+    *)
+      print_usage
+      exit 1
+      ;;
+  esac
+
+  require_windows_power_shell
+
+  local ps1_win
+  ps1_win="$(wslpath -w "$PS1_PATH")"
+
+  local env_overrides=()
+  build_env_overrides env_overrides
+
+  env "${env_overrides[@]}" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps1_win" "$command"
+}
+
+main "${1:-status}"

@@ -10,7 +10,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RootDir = (Resolve-Path $ScriptDir).Path
 $BinPath = if ($env:BIN_PATH) { $env:BIN_PATH } else { Join-Path $RootDir '.tmp\llama_win_cuda\llama-server.exe' }
 $HostAddr = if ($env:HOST) { $env:HOST } else { '127.0.0.1' }
-$PortNum = if ($env:PORT) { $env:PORT } else { '8080' }
+$PortNum = if ($env:PORT) { $env:PORT } else { '8081' }
 $CtxSize = if ($env:CTX_SIZE) { $env:CTX_SIZE } else { '16384' }
 $ImageMinTokens = if ($env:IMAGE_MIN_TOKENS) { $env:IMAGE_MIN_TOKENS } else { '256' }
 $ImageMaxTokens = if ($env:IMAGE_MAX_TOKENS) { $env:IMAGE_MAX_TOKENS } else { '1024' }
@@ -20,6 +20,9 @@ $MmprojPath = if ($env:MMPROJ_PATH) { $env:MMPROJ_PATH } else { Join-Path $RootD
 $WebuiDir = Join-Path $RootDir '.tmp\webui'
 $PidFile = Join-Path $WebuiDir 'llama_server.pid'
 $CurrentLogFile = Join-Path $WebuiDir 'current.log'
+$CurrentErrLogFile = Join-Path $WebuiDir 'current.err.log'
+$GpuRequired = 'on'
+$GpuMemoryDeltaMinMiB = if ($env:GPU_MEMORY_DELTA_MIN_MIB) { $env:GPU_MEMORY_DELTA_MIN_MIB } else { '1024' }
 
 function Ensure-Dir {
     param([string]$Path)
@@ -51,6 +54,9 @@ function Get-ModelId {
 
 function Wait-Ready {
     for ($i = 0; $i -lt 60; $i++) {
+        if (($i % 5) -eq 0) {
+            Write-Host "后端加载中... $i/60 秒"
+        }
         if (Test-Health) {
             $modelId = Get-ModelId
             if (-not [string]::IsNullOrWhiteSpace($modelId)) {
@@ -60,6 +66,132 @@ function Wait-Ready {
         Start-Sleep -Seconds 1
     }
     return $false
+}
+
+function Read-LogText {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) {
+        return ''
+    }
+    try {
+        $lines = Get-Content -Path $Path -Tail 400 -ErrorAction SilentlyContinue
+        if ($null -eq $lines) {
+            return ''
+        }
+        return ($lines -join "`n")
+    } catch {
+        return ''
+    }
+}
+
+function Test-GpuReadyFromLogs {
+    param(
+        [string]$OutLogPath,
+        [string]$ErrLogPath
+    )
+    $content = (Read-LogText -Path $OutLogPath) + "`n" + (Read-LogText -Path $ErrLogPath)
+    if ([string]::IsNullOrWhiteSpace($content)) {
+        return @{ Ready = $false; Reason = '日志为空' }
+    }
+
+    $match = [regex]::Match($content, 'offloaded\s+(\d+)\/(\d+)\s+layers\s+to\s+GPU', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($match.Success) {
+        $offloaded = [int]$match.Groups[1].Value
+        $total = [int]$match.Groups[2].Value
+        if ($offloaded -gt 0) {
+            return @{ Ready = $true; Reason = "offloaded $offloaded/$total" }
+        }
+        return @{ Ready = $false; Reason = "offloaded 0/$total" }
+    }
+
+    $cpuFallbackPattern = 'cuda[^`n]*failed|no cuda-capable device|unable to initialize cuda|using cpu'
+    if ($content -match $cpuFallbackPattern) {
+        return @{ Ready = $false; Reason = '检测到 CUDA 初始化失败或 CPU 回退' }
+    }
+
+    return @{ Ready = $false; Reason = '未检测到 GPU 卸载证据' }
+}
+
+function Ensure-GpuOffload {
+    param(
+        [int]$ProcessId,
+        [int]$BaselineMemoryMiB,
+        [string]$OutLogPath,
+        [string]$ErrLogPath
+    )
+    $moduleResult = @{ Ready = $false; Reason = '未执行检查' }
+    $result = @{ Ready = $false; Reason = '未知原因' }
+    $nvidiaResult = @{ Ready = $false; Reason = '未执行检查' }
+    for ($i = 0; $i -lt 60; $i++) {
+        $moduleResult = Test-CudaBackendLoaded -ProcessId $ProcessId
+        $result = Test-GpuReadyFromLogs -OutLogPath $OutLogPath -ErrLogPath $ErrLogPath
+        $nvidiaResult = Test-GpuReadyByNvidiaSmi -BaselineMemoryMiB $BaselineMemoryMiB
+        if ($moduleResult.Ready -and ($result.Ready -or $nvidiaResult.Ready)) {
+            if ($result.Ready) {
+                return "$($moduleResult.Reason)；$($result.Reason)"
+            }
+            return "$($moduleResult.Reason)；$($nvidiaResult.Reason)"
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "已禁止 CPU 回退，但未检测到 GPU 卸载。模块检查: $($moduleResult.Reason)；nvidia-smi: $($nvidiaResult.Reason)；日志检查: $($result.Reason)"
+}
+
+function Test-CudaBackendLoaded {
+    param([int]$ProcessId)
+    try {
+        $mods = Get-Process -Id $ProcessId -Module -ErrorAction Stop
+        $cuda = $mods | Where-Object { $_.ModuleName -match '^ggml-cuda.*\.dll$' } | Select-Object -First 1
+        if ($null -ne $cuda) {
+            return @{ Ready = $true; Reason = "检测到 $($cuda.ModuleName) 已加载" }
+        }
+        return @{ Ready = $false; Reason = '未检测到 ggml-cuda*.dll' }
+    } catch {
+        return @{ Ready = $false; Reason = '无法读取 llama-server 进程模块' }
+    }
+}
+
+function Test-GpuReadyByNvidiaSmi {
+    param([int]$BaselineMemoryMiB)
+    $snapshot = Get-GpuMemoryUsedMiB
+    if (-not $snapshot.Ok) {
+        return @{ Ready = $false; Reason = $snapshot.Reason }
+    }
+    $delta = $snapshot.UsedMiB - $BaselineMemoryMiB
+    if ($snapshot.UsedMiB -gt 0 -and $delta -ge [int]$GpuMemoryDeltaMinMiB) {
+        return @{ Ready = $true; Reason = "nvidia-smi 显存占用 ${snapshot.UsedMiB}MiB，较基线增加 ${delta}MiB" }
+    }
+    return @{ Ready = $false; Reason = "显存占用 ${snapshot.UsedMiB}MiB，较基线增加 ${delta}MiB，阈值 ${GpuMemoryDeltaMinMiB}MiB" }
+}
+
+function Get-GpuMemoryUsedMiB {
+    $nvidia = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+    if (-not $nvidia) {
+        $nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+    }
+    if (-not $nvidia) {
+        return @{ Ok = $false; UsedMiB = 0; Reason = 'nvidia-smi 不可用' }
+    }
+
+    $output = & $nvidia.Source '--query-gpu=memory.used' '--format=csv,noheader,nounits' 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        return @{ Ok = $false; UsedMiB = 0; Reason = 'nvidia-smi 执行失败' }
+    }
+
+    $rows = @($output | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^[0-9]+$' })
+    if ($rows.Count -eq 0) {
+        return @{ Ok = $false; UsedMiB = 0; Reason = 'nvidia-smi 未返回显存数据' }
+    }
+    $maxUsed = 0
+    foreach ($row in $rows) {
+        $memValue = 0
+        if ([int]::TryParse($row, [ref]$memValue)) {
+            if ($memValue -gt $maxUsed) {
+                $maxUsed = $memValue
+            }
+        }
+    }
+    return @{ Ok = $true; UsedMiB = $maxUsed; Reason = 'ok' }
 }
 
 function Stop-Server {
@@ -81,6 +213,9 @@ function Stop-Server {
     if (Test-Path $PidFile) {
         Remove-Item -Path $PidFile -Force -ErrorAction SilentlyContinue
     }
+    if (Test-Path $CurrentErrLogFile) {
+        Remove-Item -Path $CurrentErrLogFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Show-Status {
@@ -96,6 +231,12 @@ function Show-Status {
             $p = Get-Content -Path $CurrentLogFile -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($p) {
                 Write-Host "日志: $p"
+            }
+        }
+        if (Test-Path $CurrentErrLogFile) {
+            $ep = Get-Content -Path $CurrentErrLogFile -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($ep) {
+                Write-Host "错误日志: $ep"
             }
         }
         return
@@ -123,6 +264,9 @@ function Validate-Limits {
     }
     if ($MmprojOffload -ne 'on' -and $MmprojOffload -ne 'off') {
         throw 'MMPROJ_OFFLOAD 仅支持 on 或 off'
+    }
+    if (($GpuMemoryDeltaMinMiB -notmatch '^[0-9]+$') -or [int]$GpuMemoryDeltaMinMiB -le 0) {
+        throw 'GPU_MEMORY_DELTA_MIN_MIB 必须是正整数'
     }
 }
 
@@ -169,17 +313,41 @@ function Start-Server {
     }
 
     $logPath = Join-Path $WebuiDir ("llama_server_9b_{0}.log" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
-    $proc = Start-Process -FilePath $BinPath -ArgumentList $args -WindowStyle Hidden -PassThru
+    $errLogPath = Join-Path $WebuiDir ("llama_server_9b_{0}.err.log" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+    if (Test-Path $logPath) {
+        Remove-Item -Path $logPath -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $errLogPath) {
+        Remove-Item -Path $errLogPath -Force -ErrorAction SilentlyContinue
+    }
+    $baselineGpuMemoryMiB = 0
+    $gpuBaseline = Get-GpuMemoryUsedMiB
+    if ($gpuBaseline.Ok) {
+        $baselineGpuMemoryMiB = [int]$gpuBaseline.UsedMiB
+    }
+    Write-Host '后端进程启动中，正在装载模型到 GPU...'
+    $proc = Start-Process -FilePath $BinPath -ArgumentList $args -WindowStyle Hidden -RedirectStandardOutput $logPath -RedirectStandardError $errLogPath -PassThru
     Set-Content -Path $PidFile -Value $proc.Id -Encoding ascii
     Set-Content -Path $CurrentLogFile -Value $logPath -Encoding utf8
+    Set-Content -Path $CurrentErrLogFile -Value $errLogPath -Encoding utf8
 
-    if (-not (Wait-Ready)) {
-        throw '服务启动失败，后端在 60 秒内未就绪。'
+    $startupReady = $false
+    try {
+        if (-not (Wait-Ready)) {
+            throw '服务启动失败，后端在 60 秒内未就绪。'
+        }
+        $gpuInfo = Ensure-GpuOffload -ProcessId $proc.Id -BaselineMemoryMiB $baselineGpuMemoryMiB -OutLogPath $logPath -ErrLogPath $errLogPath
+        Write-Host "GPU 校验通过: $gpuInfo"
+        $startupReady = $true
+    } finally {
+        if (-not $startupReady) {
+            Stop-Server
+        }
     }
 
     Write-Host "已切换到 9b ($ThinkMode)"
     Write-Host "地址: http://$HostAddr`:$PortNum"
-    Write-Host "视觉限制: image tokens $ImageMinTokens-$ImageMaxTokens, mmproj offload=$MmprojOffload, ctx=$CtxSize"
+    Write-Host "视觉限制: image tokens $ImageMinTokens-$ImageMaxTokens, mmproj offload=$MmprojOffload, ctx=$CtxSize, gpu_required=$GpuRequired"
     Show-Status
 }
 

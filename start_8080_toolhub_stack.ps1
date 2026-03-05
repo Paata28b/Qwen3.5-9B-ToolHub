@@ -50,6 +50,21 @@ function Test-GatewayReady {
     }
 }
 
+function Stop-OrphanGatewayProcesses {
+    try {
+        $rootPattern = [regex]::Escape($RootDir)
+        $targets = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue | Where-Object {
+            $cmd = [string]$_.CommandLine
+            $cmd -match 'run_8080_toolhub_gateway\.py' -and $cmd -match $rootPattern
+        }
+        foreach ($proc in $targets) {
+            if ($proc.ProcessId) {
+                Stop-Process -Id ([int]$proc.ProcessId) -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } catch {}
+}
+
 function Start-Backend {
     if ($env:MODEL_KEY -and $env:MODEL_KEY -ne '9b') {
         throw "当前交付包仅支持 MODEL_KEY=9b，收到: $($env:MODEL_KEY)"
@@ -71,6 +86,7 @@ function Start-Backend {
 
 function Start-Gateway {
     Ensure-Dir $RuntimeDir
+    Stop-OrphanGatewayProcesses
     if (Test-GatewayRunning) {
         Write-Host '网关状态: 已运行'
         Write-Host "PID: $(Get-Content -Path $PidFile)"
@@ -94,6 +110,9 @@ function Start-Gateway {
     Set-Content -Path $PidFile -Value $proc.Id -Encoding ascii
 
     for ($i = 0; $i -lt 60; $i++) {
+        if (($i % 5) -eq 0) {
+            Write-Host "网关启动中... $i/60 秒"
+        }
         if ((Test-GatewayRunning) -and (Test-GatewayReady)) {
             return
         }
@@ -108,6 +127,7 @@ function Start-Gateway {
 }
 
 function Stop-Gateway {
+    Stop-OrphanGatewayProcesses
     if (-not (Test-GatewayRunning)) {
         if (Test-Path $PidFile) {
             Remove-Item -Path $PidFile -Force -ErrorAction SilentlyContinue
@@ -180,11 +200,14 @@ function Stop-Backend {
 }
 
 function Start-Stack {
+    Write-Host '步骤 1/2: 启动模型后端（严格 GPU 校验）'
     Start-Backend
+    Write-Host '步骤 2/2: 启动网关服务'
     Start-Gateway
     Write-Host '栈已启动'
     Write-Host "前端入口: http://$GatewayHost`:$GatewayPort"
     Write-Host "模型后端: http://$BackendHost`:$BackendPort"
+    Write-Host '可用状态检查命令: .\start_8080_toolhub_stack.cmd status'
 }
 
 function Stop-Stack {
