@@ -9,19 +9,19 @@
 ### PowerShell 手动入口
 
 ```powershell
-.\install.ps1
+.\install.cmd
 ```
 
 ### WSL 兼容入口
 
 ```powershell
-.\install.ps1 -Wsl
+.\install.cmd -Wsl
 ```
 
 ## 2. 启动
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 start
+.\start_8080_toolhub_stack.cmd start
 ```
 
 ## 3. 打开网页
@@ -31,19 +31,19 @@
 ## 4. 查看状态
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 status
+.\start_8080_toolhub_stack.cmd status
 ```
 
 ## 5. 查看日志
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 logs
+.\start_8080_toolhub_stack.cmd logs
 ```
 
 ## 6. 停止服务
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 stop
+.\start_8080_toolhub_stack.cmd stop
 ```
 
 ## 7. WSL 旧命令

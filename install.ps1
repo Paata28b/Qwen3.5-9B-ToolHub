@@ -39,7 +39,7 @@ function Invoke-WinInstaller {
     throw "Windows install failed, exit code: $LASTEXITCODE"
   }
   Write-Step 'Install completed (Windows)'
-  Write-Step 'Start command: .\start_8080_toolhub_stack.ps1 start'
+  Write-Step 'Start command: .\start_8080_toolhub_stack.cmd start'
 }
 
 if ($Wsl) {

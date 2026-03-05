@@ -14,7 +14,13 @@ $MmprojPath = Join-Path $ModelDir 'mmproj-Qwen3.5-9B-BF16.gguf'
 
 $DefaultGgufUrl = 'https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf'
 $DefaultMmprojUrl = 'https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/resolve/main/mmproj-Qwen3.5-9B-BF16.gguf'
-$AssetPattern = 'win-cuda-cu12\.4.*x64\.zip$'
+$PreferredCudaAssetRegexes = @(
+    '^llama-.*-bin-win-cuda-12\.4-x64\.zip$',
+    '^cudart-llama-bin-win-cuda-12\.4-x64\.zip$',
+    '^llama-.*-bin-win-cuda-13\.1-x64\.zip$',
+    '^cudart-llama-bin-win-cuda-13\.1-x64\.zip$',
+    'win-cuda-.*-x64\.zip$'
+)
 
 function Write-Step {
     param([string]$Message)
@@ -85,17 +91,34 @@ function Resolve-LlamaCudaUrl {
     }
     $api = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest'
     $release = Invoke-RestMethod -Uri $api -Method Get
-    foreach ($asset in $release.assets) {
-        if ($asset.name -match $AssetPattern) {
-            return $asset.browser_download_url
+    foreach ($assetRegex in $PreferredCudaAssetRegexes) {
+        foreach ($asset in $release.assets) {
+            if ($asset.name -match $assetRegex) {
+                Write-Step "使用 llama.cpp 资源: $($asset.name)"
+                return $asset.browser_download_url
+            }
         }
     }
-    throw '自动解析 llama.cpp CUDA 下载地址失败，请设置 LLAMA_WIN_CUDA_URL。'
+    $assetNames = @($release.assets | ForEach-Object { $_.name })
+    $preview = ($assetNames | Select-Object -First 12) -join ', '
+    throw "自动解析 llama.cpp CUDA 下载地址失败。未匹配到 win-cuda x64 资源。可用资源: $preview。可手动设置 LLAMA_WIN_CUDA_URL。"
 }
 
 function Ensure-PythonEnv {
     $python = Get-PythonExe
-    if (-not (Test-Path $VenvDir)) {
+    $venvExists = Test-Path $VenvDir
+    $venvPythonExists = Test-Path $VenvPython
+    if ($venvExists -and -not $venvPythonExists) {
+        Write-Step "检测到非 Windows 虚拟环境，重建: $VenvDir"
+        Remove-Item -Path $VenvDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $VenvDir) {
+            Write-Step '目录无法直接删除，尝试 venv --clear 重建'
+            Invoke-Python -PythonSpec $python -Args @('-m', 'venv', '--clear', $VenvDir)
+        }
+        $venvExists = Test-Path $VenvDir
+        $venvPythonExists = Test-Path $VenvPython
+    }
+    if (-not $venvExists) {
         Write-Step "创建虚拟环境: $VenvDir"
         Invoke-Python -PythonSpec $python -Args @('-m', 'venv', $VenvDir)
     }
@@ -163,8 +186,8 @@ function Main {
     Ensure-LlamaRuntime
     Ensure-ModelFiles
     Write-Step '安装完成'
-    Write-Step '启动命令: .\\start_8080_toolhub_stack.ps1 start'
-    Write-Step '停止命令: .\\start_8080_toolhub_stack.ps1 stop'
+    Write-Step '启动命令: .\\start_8080_toolhub_stack.cmd start'
+    Write-Step '停止命令: .\\start_8080_toolhub_stack.cmd stop'
 }
 
 Main

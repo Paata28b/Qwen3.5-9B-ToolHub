@@ -1,6 +1,6 @@
 # Qwen3.5-9B ToolHub — 本地全能 AI 助手
 
-基于 Qwen3.5-9B 多模态大模型的本地一体化部署方案。默认走 Windows 原生安装与启动流程，不需要依赖 WSL。
+基于 Qwen3.5-9B 多模态大模型的本地一体化部署方案。
 
 ## 能做什么
 
@@ -32,7 +32,13 @@
 也可以手动执行：
 
 ```powershell
-.\install.ps1
+.\install.cmd
+```
+
+若要执行 PowerShell 脚本，请用下面命令避免执行策略拦截：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 安装脚本会自动完成：
@@ -44,7 +50,7 @@
 ### 2. 启动服务
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 start
+.\start_8080_toolhub_stack.cmd start
 ```
 
 首次启动需要 30 到 60 秒加载模型到 GPU。看到 栈已启动 表示就绪。
@@ -56,31 +62,46 @@
 ### 4. 停止服务
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 stop
+.\start_8080_toolhub_stack.cmd stop
 ```
 
 ## 服务管理
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 start
-.\start_8080_toolhub_stack.ps1 stop
-.\start_8080_toolhub_stack.ps1 restart
-.\start_8080_toolhub_stack.ps1 status
-.\start_8080_toolhub_stack.ps1 logs
+.\start_8080_toolhub_stack.cmd start
+.\start_8080_toolhub_stack.cmd stop
+.\start_8080_toolhub_stack.cmd restart
+.\start_8080_toolhub_stack.cmd status
+.\start_8080_toolhub_stack.cmd logs
 ```
 
 ## 架构概览
 
-```mermaid
-graph TD
-    Client[浏览器 / 第三方客户端]
-    
-    Gateway["网关层 (端口 8080)<br>run_8080_toolhub_gateway.py<br>• OpenAI 兼容 API<br>• 工具调用代理<br>• 流式 SSE 输出<br>• WebUI 透传"]
-    
-    Backend["模型后端 (端口 8081)<br>llama-server (llama.cpp)<br>• Qwen3.5-9B 推理<br>• 视觉理解 (mmproj)<br>• GPU 全层卸载 + Flash Attention"]
-
-    Client --> Gateway
-    Gateway --> Backend
+```
+┌──────────────────────────────────────────┐
+│          浏览器 / 第三方客户端             │
+└────────────────────┬─────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────┐
+│            网关层 (端口 8080)             │
+│       run_8080_toolhub_gateway.py        │
+├──────────────────────────────────────────┤
+│  • OpenAI 兼容 API                       │
+│  • 工具调用代理                           │
+│  • 流式 SSE 输出                         │
+│  • WebUI 透传                            │
+└────────────────────┬─────────────────────┘
+                     │
+                     ▼
+┌──────────────────────────────────────────┐
+│           模型后端 (端口 8081)            │
+│         llama-server (llama.cpp)         │
+├──────────────────────────────────────────┤
+│  • Qwen3.5-9B 推理                       │
+│  • 视觉理解 (mmproj)                      │
+│  • GPU 全层卸载 + Flash Attention         │
+└──────────────────────────────────────────┘
 ```
 
 ## 内置工具
@@ -117,8 +138,8 @@ MMPROJ_OFFLOAD=off
 ### 思考模式切换
 
 ```powershell
-$env:THINK_MODE = 'think-on';  .\start_8080_toolhub_stack.ps1 restart
-$env:THINK_MODE = 'think-off'; .\start_8080_toolhub_stack.ps1 restart
+$env:THINK_MODE = 'think-on';  .\start_8080_toolhub_stack.cmd restart
+$env:THINK_MODE = 'think-off'; .\start_8080_toolhub_stack.cmd restart
 ```
 
 ## API 使用
@@ -142,14 +163,14 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 ### 页面报内容编码错误
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 restart
+.\start_8080_toolhub_stack.cmd restart
 ```
 
 ### 启动后模型未就绪
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 status
-.\start_8080_toolhub_stack.ps1 logs
+.\start_8080_toolhub_stack.cmd status
+.\start_8080_toolhub_stack.cmd logs
 ```
 
 ### 提示 llama-server.exe 不存在
@@ -168,20 +189,20 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 ### 显存不足
 
 ```powershell
-$env:CTX_SIZE = '8192';         .\start_8080_toolhub_stack.ps1 restart
-$env:IMAGE_MAX_TOKENS = '512';  .\start_8080_toolhub_stack.ps1 restart
-$env:MMPROJ_OFFLOAD = 'off';    .\start_8080_toolhub_stack.ps1 restart
+$env:CTX_SIZE = '8192';         .\start_8080_toolhub_stack.cmd restart
+$env:IMAGE_MAX_TOKENS = '512';  .\start_8080_toolhub_stack.cmd restart
+$env:MMPROJ_OFFLOAD = 'off';    .\start_8080_toolhub_stack.cmd restart
 ```
 
-## 兼容模式
+## WSL
 
-项目仍保留 WSL 兼容入口，适合已有 WSL 用户：
+适合已有 WSL 用户：
 
 ```powershell
-.\install.ps1 -Wsl
+.\install.cmd -Wsl
 ```
 
-WSL 内仍可使用原脚本：
+WSL 内可使用：
 
 ```bash
 ./install.sh
@@ -193,13 +214,15 @@ WSL 内仍可使用原脚本：
 ```
 .
 ├── bootstrap.bat                     # Windows 一键安装入口
+├── install.cmd                       # Windows 安装入口（免策略拦截）
 ├── install.ps1                       # 安装分发器（默认 Win，可选 WSL）
 ├── install.win.ps1                   # Windows 安装脚本（主流程）
-├── install.sh                        # WSL 兼容安装脚本
+├── install.sh                        # WSL 安装脚本
+├── start_8080_toolhub_stack.cmd      # Windows 服务启停入口（免策略拦截）
 ├── start_8080_toolhub_stack.ps1      # Windows 服务启停管理（主流程）
 ├── switch_qwen35_webui.ps1           # Windows 模型后端控制（主流程）
-├── start_8080_toolhub_stack.sh       # WSL 兼容服务启停管理
-├── switch_qwen35_webui.sh            # WSL 兼容模型后端控制
+├── start_8080_toolhub_stack.sh       # WSL 服务启停管理
+├── switch_qwen35_webui.sh            # WSL 模型后端控制
 ├── run_8080_toolhub_gateway.py       # 网关服务
 ├── toolhub_gateway_agent.py          # 工具代理逻辑
 ├── agent_runtime/                    # 工具实现
@@ -208,10 +231,9 @@ WSL 内仍可使用原脚本：
 └── docs/                             # 补充文档
 ```
 
-## 已知限制
+## 限制
 
-* 当前交付包仅内置 9B 模型配置
-* 网关模式下文件系统为只读
+* 网关模式下文件系统为只读（可以自行配置为更多权限，后果自负）
 * 默认上下文窗口 16K
 
 ## 致谢

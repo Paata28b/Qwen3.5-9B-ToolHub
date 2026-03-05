@@ -5,7 +5,7 @@
 执行重启：
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 restart
+.\start_8080_toolhub_stack.cmd restart
 ```
 
 如果仍失败，先清浏览器缓存，再刷新页面。
@@ -15,13 +15,13 @@
 先看状态：
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 status
+.\start_8080_toolhub_stack.cmd status
 ```
 
 再看日志：
 
 ```powershell
-.\start_8080_toolhub_stack.ps1 logs
+.\start_8080_toolhub_stack.cmd logs
 ```
 
 ## 3. 提示缺少 llama-server.exe
@@ -44,11 +44,26 @@
 ## 6. 需要走 WSL 兼容流程
 
 ```powershell
-.\install.ps1 -Wsl
+.\install.cmd -Wsl
 ```
 
 然后在 WSL 内执行：
 
 ```bash
 ./start_8080_toolhub_stack.sh start
+```
+
+## 7. PowerShell 报脚本执行策略错误
+
+如果看到 `PSSecurityException` 或 `about_Execution_Policies`，不要直接执行 `.ps1`，改用下面命令：
+
+```powershell
+.\install.cmd
+.\start_8080_toolhub_stack.cmd start
+```
+
+如果你必须调用 `.ps1`，请显式带上 Bypass：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```

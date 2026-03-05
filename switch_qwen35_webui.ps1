@@ -65,10 +65,10 @@ function Wait-Ready {
 function Stop-Server {
     if (Test-Path $PidFile) {
         $raw = Get-Content -Path $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1
-        $pid = 0
-        if ([int]::TryParse([string]$raw, [ref]$pid) -and $pid -gt 0) {
+        $serverPid = 0
+        if ([int]::TryParse([string]$raw, [ref]$serverPid) -and $serverPid -gt 0) {
             try {
-                Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
             } catch {}
         }
     }

@@ -33,11 +33,11 @@ function Test-GatewayRunning {
         return $false
     }
     $raw = Get-Content -Path $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1
-    $pid = 0
-    if (-not [int]::TryParse([string]$raw, [ref]$pid)) {
+    $gatewayPid = 0
+    if (-not [int]::TryParse([string]$raw, [ref]$gatewayPid)) {
         return $false
     }
-    $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+    $proc = Get-Process -Id $gatewayPid -ErrorAction SilentlyContinue
     return $null -ne $proc
 }
 
@@ -116,8 +116,8 @@ function Stop-Gateway {
         return
     }
 
-    $pid = [int](Get-Content -Path $PidFile | Select-Object -First 1)
-    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+    $gatewayPid = [int](Get-Content -Path $PidFile | Select-Object -First 1)
+    Stop-Process -Id $gatewayPid -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
     if (Test-Path $PidFile) {
         Remove-Item -Path $PidFile -Force -ErrorAction SilentlyContinue
@@ -200,7 +200,7 @@ switch ($Command) {
     'logs' { Show-Logs; break }
     default {
         Write-Host '用法:'
-        Write-Host '  .\\start_8080_toolhub_stack.ps1 {start|stop|restart|status|logs}'
+        Write-Host '  .\\start_8080_toolhub_stack.cmd {start|stop|restart|status|logs}'
         Write-Host ''
         Write-Host '可选环境变量:'
         Write-Host '  GATEWAY_HOST=127.0.0.1'

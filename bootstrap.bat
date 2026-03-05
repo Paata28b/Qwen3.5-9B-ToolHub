@@ -4,10 +4,10 @@ set SCRIPT_DIR=%~dp0
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%install.ps1" %*
 if errorlevel 1 (
   echo.
-  echo [bootstrap] 安装失败。
+  echo [bootstrap] Install failed.
   exit /b 1
 )
 echo.
-echo [bootstrap] 安装完成。
-echo [bootstrap] 启动请运行: .\start_8080_toolhub_stack.ps1 start
+echo [bootstrap] Install completed.
+echo [bootstrap] Start command: .\start_8080_toolhub_stack.cmd start
 exit /b 0
