@@ -8,7 +8,7 @@ from typing import Union
 from qwen_agent.tools.base import BaseTool, register_tool
 from qwen_agent.utils.utils import extract_code
 
-ROOT_DIR = Path('/mnt/d/dev/Qwen3.5')
+ROOT_DIR = Path(__file__).resolve().parents[1]
 RUN_DIR = ROOT_DIR / '.tmp' / 'super_agent_data' / 'code_runs'
 DEFAULT_TIMEOUT = 60
 
@@ -72,4 +72,3 @@ class LocalCodeInterpreterTool(BaseTool):
         if not code.strip():
             raise ValueError('未检测到可执行代码')
         return {'code': code}
-

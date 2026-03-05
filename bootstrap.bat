@@ -9,4 +9,5 @@ if errorlevel 1 (
 )
 echo.
 echo [bootstrap] 安装完成。
+echo [bootstrap] 启动请运行: .\start_8080_toolhub_stack.ps1 start
 exit /b 0

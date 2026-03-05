@@ -15,6 +15,12 @@ def _ensure_parent(path: Path) -> None:
     parent.mkdir(parents=True, exist_ok=True)
 
 
+def _build_shell_command(command: str) -> list[str]:
+    if os.name == 'nt':
+        return ['powershell.exe', '-NoProfile', '-Command', command]
+    return ['bash', '-lc', command]
+
+
 @register_tool('filesystem', allow_overwrite=True)
 class FilesystemTool(BaseTool):
     description = '文件系统工具，支持目录列举、读写文件、创建目录和删除。'
@@ -132,10 +138,11 @@ class RunCommandTool(BaseTool):
         if not command:
             raise ValueError('command 不能为空')
         timeout_sec = int(params.get('timeout_sec', DEFAULT_TIMEOUT))
-        cwd = params.get('cwd') or os.getcwd()
+        cwd_raw = params.get('cwd') or os.getcwd()
+        cwd = str(Path(os.path.expanduser(cwd_raw)).resolve())
 
         completed = subprocess.run(
-            ['bash', '-lc', command],
+            _build_shell_command(command),
             cwd=cwd,
             text=True,
             capture_output=True,
@@ -150,4 +157,3 @@ class RunCommandTool(BaseTool):
             'stderr': completed.stderr,
         }
         return json.dumps(payload, ensure_ascii=False, indent=2)
-

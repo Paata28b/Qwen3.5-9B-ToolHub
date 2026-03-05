@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -6,11 +7,17 @@ from typing import Any, Dict, Union
 
 from qwen_agent.tools.base import BaseTool, register_tool
 
-ROOT_DIR = Path('/mnt/d/dev/Qwen3.5')
+ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / '.tmp' / 'super_agent_data'
 MEMORY_FILE = DATA_DIR / 'memory.json'
 TODO_DIR = DATA_DIR / 'todos'
 TASK_FILE = DATA_DIR / 'tasks.jsonl'
+
+
+def _build_shell_command(command: str) -> list[str]:
+    if os.name == 'nt':
+        return ['powershell.exe', '-NoProfile', '-Command', command]
+    return ['bash', '-lc', command]
 
 
 def _ensure_data_dirs() -> None:
@@ -150,7 +157,7 @@ class TaskTool(BaseTool):
         result = None
         command = params.get('command')
         if command:
-            run = subprocess.run(['bash', '-lc', command], text=True, capture_output=True, check=False)
+            run = subprocess.run(_build_shell_command(command), text=True, capture_output=True, check=False)
             result = {
                 'returncode': run.returncode,
                 'stdout': run.stdout,
@@ -161,4 +168,3 @@ class TaskTool(BaseTool):
             fp.write(json.dumps(event, ensure_ascii=False) + '\n')
         payload = {'saved_to': str(TASK_FILE), 'task': event, 'command_result': result}
         return json.dumps(payload, ensure_ascii=False, indent=2)
-

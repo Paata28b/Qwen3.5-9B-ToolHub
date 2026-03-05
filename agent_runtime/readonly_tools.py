@@ -5,12 +5,15 @@ from typing import Union
 
 from qwen_agent.tools.base import BaseTool, register_tool
 
-DEFAULT_ROOT = '/mnt/d/dev/Qwen3.5'
 DEFAULT_MAX_READ_BYTES = 512 * 1024
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
 def _resolve_root() -> Path:
-    root = os.getenv('READONLY_FS_ROOT', DEFAULT_ROOT)
+    root = os.getenv('READONLY_FS_ROOT', str(_project_root()))
     return Path(os.path.expanduser(root)).resolve()
 
 

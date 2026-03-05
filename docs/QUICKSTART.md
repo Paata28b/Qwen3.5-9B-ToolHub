@@ -2,20 +2,26 @@
 
 ## 1. 安装
 
-### Windows 入口
+### Windows 主入口
 
 在项目根目录双击运行 `bootstrap.bat`。
 
-### 纯 WSL 入口
+### PowerShell 手动入口
 
-```bash
-./install.sh
+```powershell
+.\install.ps1
+```
+
+### WSL 兼容入口
+
+```powershell
+.\install.ps1 -Wsl
 ```
 
 ## 2. 启动
 
-```bash
-./start_8080_toolhub_stack.sh start
+```powershell
+.\start_8080_toolhub_stack.ps1 start
 ```
 
 ## 3. 打开网页
@@ -24,18 +30,25 @@
 
 ## 4. 查看状态
 
-```bash
-./start_8080_toolhub_stack.sh status
+```powershell
+.\start_8080_toolhub_stack.ps1 status
 ```
 
 ## 5. 查看日志
 
-```bash
-./start_8080_toolhub_stack.sh logs
+```powershell
+.\start_8080_toolhub_stack.ps1 logs
 ```
 
 ## 6. 停止服务
 
+```powershell
+.\start_8080_toolhub_stack.ps1 stop
+```
+
+## 7. WSL 旧命令
+
 ```bash
+./start_8080_toolhub_stack.sh start
 ./start_8080_toolhub_stack.sh stop
 ```
